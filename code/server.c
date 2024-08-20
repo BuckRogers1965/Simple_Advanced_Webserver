@@ -12,9 +12,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-
 #include <sys/epoll.h>
-
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <string.h>
@@ -22,32 +20,23 @@
 #include <signal.h>
 #include <errno.h>
 #include <stdlib.h>
-
 #include <unistd.h>
 
-typedef struct object
-{
+typedef struct object {
   int state;
   _cb_1 *callback_new;
   _cb_3 *callback_data;
   _cb_1 *callback_close;
-
   int PrimarySocket;
   int Port;
   int QDepth;
-
-//  int buf_size;
-
   int Running;
-
   struct epoll_event ev;
   struct epoll_event *events;
   int epfd;
-
 } object;
 
-void nonblock(int sockfd)
-{
+void nonblock(int sockfd) {
   int opts;
   opts = fcntl(sockfd, F_GETFL);
   if(opts < 0)
@@ -64,8 +53,7 @@ void nonblock(int sockfd)
 }
 
 Server *
-ServerNew ()
-{
+ServerNew () {
   struct object *obj = (struct object *) calloc (sizeof (object), 1);
 
   /*initialize here if needed */
@@ -74,8 +62,7 @@ ServerNew ()
 }
 
 int
-SetPort (Server * Current, int Port, int QDepth)
-{
+SetPort (Server * Current, int Port, int QDepth) {
   struct object *obj = (object *) Current;
   obj->Port = Port;
   obj->QDepth = QDepth;
@@ -83,9 +70,7 @@ SetPort (Server * Current, int Port, int QDepth)
 }
 
 void
-SetCallbacks (Server * Current, _cb_1 * cbnew, _cb_3 * cbdata,
-	      _cb_1 * cbclose)
-{
+SetCallbacks (Server * Current, _cb_1 * cbnew, _cb_3 * cbdata, _cb_1 * cbclose) {
   struct object *obj = (object *) Current;
   obj->callback_new = cbnew;
   obj->callback_data = cbdata;
@@ -93,8 +78,7 @@ SetCallbacks (Server * Current, _cb_1 * cbnew, _cb_3 * cbdata,
 }
 
 int
-ServerOpen (Server * Current)
-{
+ServerOpen (Server * Current) {
   struct object *obj = (object *) Current;
   struct sockaddr_in sin;
 
@@ -149,8 +133,7 @@ ServerOpen (Server * Current)
 }
 
 int
-ServerClose (Server * Current)
-{
+ServerClose (Server * Current) {
   struct object *obj = (object *) Current;
 
   if (!obj->Running)
@@ -165,8 +148,7 @@ ServerClose (Server * Current)
 }
 
 int
-ServerLoop (Server * Current)
-{
+ServerLoop (Server * Current) {
   struct object *obj = (object *) Current;
 
   int clifd;
@@ -218,13 +200,12 @@ ServerLoop (Server * Current)
   return (0);
 }  /* END LOOP */
 
-int ServerRunning(Server * Current){
+int ServerRunning(Server * Current) {
   struct object *obj = (object *) Current;
-
   return (obj->Running);
 }
 
-int ServerDel (Server * Current){
+int ServerDel (Server * Current) {
 
   struct object *obj = (object *) Current;
 

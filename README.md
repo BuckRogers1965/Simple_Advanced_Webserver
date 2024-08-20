@@ -38,8 +38,17 @@ http://192.168.1.179:8080/path/
 - [ ] Add command line arguments to support different paths.
 - [ ] Add command line args to support number of threads.
 - [ ] Support a config file. 
-- [ ] Reorganize the new functions for python scriptin into separate modules. 
 - [ ] stop reversing the order of the url parameters.
-- [ ] Put in good debugging. Clean up current debug 
+- [ ] Put in good debugging.
 - [ ] Add logging
+- [ ] Support SSL
 
+
+
+--
+
+# Future projects.  
+
+
+how to self sign a certificate and import into chrome.
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 3650 -nodes -subj "/C=US/ST=OH/L=City/O=Citizen/OU=Person/CN=Bob"

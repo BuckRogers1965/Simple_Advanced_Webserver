@@ -1,6 +1,6 @@
 
 
-void  ThreadInitialize(int, const char *);
+void  ThreadInitialize(int);
 void  ThreadHandleResponse(int);
 void ThreadCheck();
 

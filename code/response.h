@@ -1,0 +1,1 @@
+void HandleResponse(int fd, char *buf, int n);

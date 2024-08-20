@@ -1,46 +1,38 @@
 /* James M. Rogers */
 /* Copyright 2012  */
 
-#include "server.h"
-#include "threads.h"
 #include <unistd.h>
 
-void
-NewConn (int fd)
-{
-  /* Setup datastructure for a new connection on fd. */
-  /* Clear data structures before use. */
-  
-}
+#include "server.h"
+#include "threads.h"
+#include "pyscript_init.h"
 
+
+void
+NewConn ( int fd )
+{ /* Setup datastructure for a new connection on fd. */ }
 
 void
 NewData (int fd, char *data, int size)
-{
-
-  ThreadHandleResponse(fd);
-}
-
+{ ThreadHandleResponse(fd); }
 
 void
 ConnClose (int fd)
-{
-  /* Mark connection as closed. */
-}
+{ /* Mark connection as closed. */ }
 
 int
-main ()
-{
+main () {
   Server *New;
 
-  ThreadInitialize(10, "python");
+  ThreadInitialize(25);
+  PythonInit("python");
 
   New = ServerNew ();
   SetPort (New, 8080, 25);
   SetCallbacks (New, NewConn, NewData, ConnClose);
   ServerOpen (New);
   while(ServerRunning(New)){
-    usleep(10);
+    usleep(5);
     ServerLoop (New);
     ThreadCheck();
   }

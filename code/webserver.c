@@ -2,7 +2,6 @@
 /* Copyright 2012  */
 
 #include "server.h"
-#include "connect.h"
 #include "threads.h"
 #include <unistd.h>
 

@@ -38,6 +38,7 @@ void HandleResponse(int fd, char *buf, int n) {
     char goodresponse[1024] = "HTTP/1.1 200 OK\r\n\r\n";
 
     HttpRequest *req = parseHttpRequest(buf);
+    //printf("%s\n", buf);
     //printHttpRequest(req);
 
     // Copy the path from the buffer
@@ -46,7 +47,7 @@ void HandleResponse(int fd, char *buf, int n) {
         //printf(" *** path %s, \n ", req->path );
         if (strstr(req->path, "python") == req->path) {
             printf("+"); fflush(stdout);
-            if (!ExecutePythonScript(fd, req->path, req->params) )
+            if (!ExecutePythonScript(fd, req->path, req->query_params) )
                 send(fd, badresponse, strlen(badresponse), 0);
             return;
         } else {

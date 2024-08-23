@@ -2,40 +2,40 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Define a structure for parameters
-typedef struct Parameter {
+// Define a structure for key-value pairs (used for headers, cookies, and form data)
+typedef struct KeyValue {
     char *key;
     char *value;
-    struct Parameter *next;
-} Parameter;
+    struct KeyValue *next;
+} KeyValue;
 
 // Define a structure for HTTP request
 typedef struct HttpRequest {
     char *method;
     char *path;
     char *version;
-    char *host;
-    char *connection;
-    char *user_agent;
-    char *accept;
-    char *sec_gpc;
-    char *referer;
-    char *accept_encoding;
-    char *accept_language;
-    Parameter *params;
+    KeyValue *headers;
+    KeyValue *cookies;
+    KeyValue *query_params;
+    KeyValue *form_data;
+    char *body;
+    long content_length;
 } HttpRequest;
 
-// Function prototypes
-HttpRequest* parseHttpRequest(const char *request);
-void freeHttpRequest(HttpRequest *req);
+// Function to add a key-value pair to a list
+void addKeyValue(KeyValue **list, const char *key, const char *value) {
+    KeyValue *new_kv = (KeyValue*)malloc(sizeof(KeyValue));
+    new_kv->key = strdup(key);
+    new_kv->value = strdup(value);
+    new_kv->next = *list;
+    *list = new_kv;
+}
 
 // Function to parse the HTTP request
 HttpRequest* parseHttpRequest(const char *request) {
     HttpRequest *req = (HttpRequest*)malloc(sizeof(HttpRequest));
-    memset(req, 0, sizeof(HttpRequest)); // Initialize all fields to NULL/0
-    req->params = NULL;
+    memset(req, 0, sizeof(HttpRequest));
 
-    // Allocate a copy of the request to modify
     char *request_copy = strdup(request);
     char *line = strtok(request_copy, "\r\n");
 
@@ -49,24 +49,52 @@ HttpRequest* parseHttpRequest(const char *request) {
     }
 
     // Parse the headers
-    while ((line = strtok(NULL, "\r\n")) != NULL) {
-        if (strncmp(line, "Host:", 5) == 0) {
-            req->host = strdup(line + 6);
-        } else if (strncmp(line, "Connection:", 11) == 0) {
-            req->connection = strdup(line + 12);
-        } else if (strncmp(line, "User-Agent:", 11) == 0) {
-            req->user_agent = strdup(line + 12);
-        } else if (strncmp(line, "Accept:", 7) == 0) {
-            req->accept = strdup(line + 8);
-        } else if (strncmp(line, "Sec-GPC:", 8) == 0) {
-            req->sec_gpc = strdup(line + 9);
-        } else if (strncmp(line, "Referer:", 8) == 0) {
-            req->referer = strdup(line + 9);
-        } else if (strncmp(line, "Accept-Encoding:", 16) == 0) {
-            req->accept_encoding = strdup(line + 17);
-        } else if (strncmp(line, "Accept-Language:", 16) == 0) {
-            req->accept_language = strdup(line + 17);
+    while ((line = strtok(NULL, "\r\n")) != NULL && strlen(line) > 0) {
+        char *colon = strchr(line, ':');
+        if (colon) {
+            *colon = '\0';
+            char *value = colon + 1;
+            while (*value == ' ') value++;
+            addKeyValue(&req->headers, line, value);
+
+            // Special handling for Content-Length and Cookie
+            if (strcasecmp(line, "Content-Length") == 0) {
+                req->content_length = atol(value);
+            } else if (strcasecmp(line, "Cookie") == 0) {
+                char *cookie_str = strdup(value);
+                char *cookie_token = strtok(cookie_str, ";");
+                while (cookie_token) {
+                    char *eq = strchr(cookie_token, '=');
+                    if (eq) {
+                        *eq = '\0';
+                        char *cookie_name = cookie_token;
+                        char *cookie_value = eq + 1;
+                        while (*cookie_name == ' ') cookie_name++;
+                        addKeyValue(&req->cookies, cookie_name, cookie_value);
+                    }
+                    cookie_token = strtok(NULL, ";");
+                }
+                free(cookie_str);
+            }
         }
+    }
+
+    // Parse query parameters
+    char *query = strchr(req->path, '?');
+    if (query) {
+        *query = '\0';
+        query++;
+        char *query_copy = strdup(query);
+        char *pair = strtok(query_copy, "&");
+        while (pair) {
+            char *eq = strchr(pair, '=');
+            if (eq) {
+                *eq = '\0';
+                addKeyValue(&req->query_params, pair, eq + 1);
+            }
+            pair = strtok(NULL, "&");
+        }
+        free(query_copy);
     }
 
     // Trim leading '/' from path
@@ -76,24 +104,33 @@ HttpRequest* parseHttpRequest(const char *request) {
         req->path = trimmed_path;
     }
 
-    // Parse the query parameters in the path
-    char *query = strchr(req->path, '?');
-    if (query) {
-        *query = '\0'; // Terminate the path string
-        query++;
-        while (query && *query) {
-            char *amp = strchr(query, '&');
-            if (amp) *amp = '\0'; // Temporarily end the current parameter
-            char *eq = strchr(query, '=');
-            if (eq) {
-                *eq = '\0'; // Temporarily end the key string
-                Parameter *param = (Parameter*)malloc(sizeof(Parameter));
-                param->key = strdup(query);
-                param->value = strdup(eq + 1);
-                param->next = req->params;
-                req->params = param;
+    // Handle POST request body
+    if (strcasecmp(req->method, "POST") == 0 && req->content_length > 0) {
+        char *body_start = strstr(request, "\r\n\r\n");
+        if (body_start) {
+            body_start += 4;  // Move past \r\n\r\n
+            req->body = malloc(req->content_length + 1);
+            memcpy(req->body, body_start, req->content_length);
+            req->body[req->content_length] = '\0';
+
+            // Parse form data if content-type is application/x-www-form-urlencoded
+            KeyValue *content_type = req->headers;
+            while (content_type && strcasecmp(content_type->key, "Content-Type") != 0)
+                content_type = content_type->next;
+            
+            if (content_type && strstr(content_type->value, "application/x-www-form-urlencoded")) {
+                char *form_data_copy = strdup(req->body);
+                char *pair = strtok(form_data_copy, "&");
+                while (pair) {
+                    char *eq = strchr(pair, '=');
+                    if (eq) {
+                        *eq = '\0';
+                        addKeyValue(&req->form_data, pair, eq + 1);
+                    }
+                    pair = strtok(NULL, "&");
+                }
+                free(form_data_copy);
             }
-            query = amp ? amp + 1 : NULL;
         }
     }
 
@@ -108,47 +145,77 @@ void freeHttpRequest(HttpRequest *req) {
     free(req->method);
     free(req->path);
     free(req->version);
-    free(req->host);
-    free(req->connection);
-    free(req->user_agent);
-    free(req->accept);
-    free(req->sec_gpc);
-    free(req->referer);
-    free(req->accept_encoding);
-    free(req->accept_language);
+    free(req->body);
 
-    // Free the parameters
-    Parameter *param = req->params;
-    while (param) {
-        Parameter *next = param->next;
-        free(param->key);
-        free(param->value);
-        free(param);
-        param = next;
+    KeyValue *current, *next;
+
+    current = req->headers;
+    while (current) {
+        next = current->next;
+        free(current->key);
+        free(current->value);
+        free(current);
+        current = next;
+    }
+
+    current = req->cookies;
+    while (current) {
+        next = current->next;
+        free(current->key);
+        free(current->value);
+        free(current);
+        current = next;
+    }
+
+    current = req->query_params;
+    while (current) {
+        next = current->next;
+        free(current->key);
+        free(current->value);
+        free(current);
+        current = next;
+    }
+
+    current = req->form_data;
+    while (current) {
+        next = current->next;
+        free(current->key);
+        free(current->value);
+        free(current);
+        current = next;
     }
 
     free(req);
 }
 
+// Function to print the HTTP request (for debugging)
 void printHttpRequest(HttpRequest *req) {
-    // Print parsed result (for demonstration)
-    if (req->method) printf("Method: %s\n", req->method);
-    if (req->path) printf("Path: %s\n", req->path);
-    if (req->version) printf("Version: %s\n", req->version);
-    if (req->host) printf("Host: %s\n", req->host);
-    if (req->connection) printf("Connection: %s\n", req->connection);
-    if (req->user_agent) printf("User-Agent: %s\n", req->user_agent);
-    if (req->accept) printf("Accept: %s\n", req->accept);
-    if (req->sec_gpc) printf("Sec-GPC: %s\n", req->sec_gpc);
-    if (req->referer) printf("Referer: %s\n", req->referer);
-    if (req->accept_encoding) printf("Accept-Encoding: %s\n", req->accept_encoding);
-    if (req->accept_language) printf("Accept-Language: %s\n", req->accept_language);
+    printf("Method: %s\n", req->method);
+    printf("Path: %s\n", req->path);
+    printf("Version: %s\n", req->version);
+    printf("Content-Length: %ld\n", req->content_length);
 
-    // Print parameters
-    Parameter *param = req->params;
-    while (param) {
-        if (param->key && param->value) 
-            printf("Parameter: %s = %s\n", param->key, param->value);
-        param = param->next;
+    printf("Headers:\n");
+    for (KeyValue *kv = req->headers; kv != NULL; kv = kv->next) {
+        printf("  %s: %s\n", kv->key, kv->value);
+    }
+
+    printf("Cookies:\n");
+    for (KeyValue *kv = req->cookies; kv != NULL; kv = kv->next) {
+        printf("  %s: %s\n", kv->key, kv->value);
+    }
+
+    printf("Query Parameters:\n");
+    for (KeyValue *kv = req->query_params; kv != NULL; kv = kv->next) {
+        printf("  %s: %s\n", kv->key, kv->value);
+    }
+
+    printf("Form Data:\n");
+    for (KeyValue *kv = req->form_data; kv != NULL; kv = kv->next) {
+        printf("  %s: %s\n", kv->key, kv->value);
+    }
+
+    if (req->body) {
+        printf("Body:\n%s\n", req->body);
     }
 }

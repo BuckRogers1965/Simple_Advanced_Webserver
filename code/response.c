@@ -37,22 +37,22 @@ void HandleResponse(int fd, char *buf, int n) {
         "HTTP/1.1 404 Not Found\r\n\r\n<HTML><HEAD><meta http-equiv=\"content-type\" content=\"text/html;charset=utf-8\">\r\n<TITLE>Not Found</TITLE></HEAD><BODY>\r\n<H1>Not Found</H1>\r\n</BODY></HTML>\r\n\r\n";
     char goodresponse[1024] = "HTTP/1.1 200 OK\r\n\r\n";
 
-    HttpRequest *req = parseHttpRequest(buf);
+    HttpRequest *request = parseHttpRequest(buf);
     //printf("%s\n", buf);
-    //printHttpRequest(req);
+    //printHttpRequest(request);
 
     // Copy the path from the buffer
     if (buf != NULL && n >= 10)
     {
         //printf(" *** path %s, \n ", req->path );
-        if (strstr(req->path, "python") == req->path) {
+        if (strstr(request->path, "python") == request->path) {
             printf("+"); fflush(stdout);
-            if (!ExecutePythonScript(fd, req->path, req->query_params) )
+            if (!ExecutePythonScript(fd, request) )
                 send(fd, badresponse, strlen(badresponse), 0);
             return;
         } else {
             int fh;
-            fh = OpenFile(req);
+            fh = OpenFile(request);
             printf(".");
             if (fh > 0) {
                 struct stat stat_buf; /* hold information about input file */
@@ -68,5 +68,5 @@ void HandleResponse(int fd, char *buf, int n) {
                 send(fd, badresponse, strlen(badresponse), 0); }
         }
     }
-    freeHttpRequest(req);
+    freeHttpRequest(request);
 }

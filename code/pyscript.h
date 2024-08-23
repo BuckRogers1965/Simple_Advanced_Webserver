@@ -1,1 +1,1 @@
-int ExecutePythonScript(int fd, const char *script_path, Parameter *params);
+int ExecutePythonScript(int fd, HttpRequest *request);

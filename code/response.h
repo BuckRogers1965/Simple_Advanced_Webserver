@@ -1,1 +1,3 @@
-void HandleResponse(int fd, char *buf, int n);
+#include "conn.h"
+
+void HandleResponse(Conn *conn, char *buf, int n);

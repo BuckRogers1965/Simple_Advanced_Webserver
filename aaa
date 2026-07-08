@@ -1,0 +1,390 @@
+Only in Simple_Advanced_Webserver.gemini/code: cert.pem
+Only in Simple_Advanced_Webserver.gemini/code: conn.c
+Only in Simple_Advanced_Webserver.gemini/code: conn.h
+Only in Simple_Advanced_Webserver.gemini/code: genkeys.sh
+diff -r Simple_Advanced_Webserver/code/http_request.h Simple_Advanced_Webserver.gemini/code/http_request.h
+0a1,2
+> #ifndef HTTP_REQUEST_H
+> #define HTTP_REQUEST_H
+24c26,28
+< void printHttpRequest(HttpRequest *req); 
+---
+> void printHttpRequest(HttpRequest *req);
+> 
+> #endif /* HTTP_REQUEST_H */
+Only in Simple_Advanced_Webserver.gemini/code: key.pem
+diff -r Simple_Advanced_Webserver/code/pyscript.c Simple_Advanced_Webserver.gemini/code/pyscript.c
+3a4
+> #include <string.h>
+7a9
+> #include "conn.h"
+73c75
+< int ExecutePythonScript(int fd, HttpRequest *request)
+---
+> int ExecutePythonScript(Conn *conn, HttpRequest *request)
+176c178
+<             if (send(fd, buffer, bytes_read, 0) == -1)
+---
+>             if (ConnWrite(conn, buffer, bytes_read) <= 0)
+178c180
+<                 perror("send");
+---
+>                 perror("ConnWrite");
+diff -r Simple_Advanced_Webserver/code/pyscript.h Simple_Advanced_Webserver.gemini/code/pyscript.h
+1c1,4
+< int ExecutePythonScript(int fd, HttpRequest *request);
+---
+> #include "conn.h"
+> #include "http_request.h"
+> 
+> int ExecutePythonScript(Conn *conn, HttpRequest *request);
+diff -r Simple_Advanced_Webserver/code/response.c Simple_Advanced_Webserver.gemini/code/response.c
+6,7d5
+< #include <sys/sendfile.h>
+< #include <sys/socket.h>
+8a7
+> #include "conn.h"
+35c34
+< void HandleResponse(int fd, char *buf, int n) {
+---
+> void HandleResponse(Conn *conn, char *buf, int n) {
+50,51c49,51
+<             if (!ExecutePythonScript(fd, request) )
+<                 send(fd, badresponse, strlen(badresponse), 0);
+---
+>             if (!ExecutePythonScript(conn, request) )
+>                 ConnWrite(conn, badresponse, strlen(badresponse));
+>             freeHttpRequest(request);
+59c59
+<                 send(fd, goodresponse, strlen(goodresponse), 0);
+---
+>                 ConnWrite(conn, goodresponse, strlen(goodresponse));
+62c62
+<                 sendfile(fd, fh, NULL, stat_buf.st_size);
+---
+>                 ConnSendFile(conn, fh, stat_buf.st_size);
+65c65
+<             else { 
+---
+>             else {
+68c68
+<                 send(fd, badresponse, strlen(badresponse), 0); }
+---
+>                 ConnWrite(conn, badresponse, strlen(badresponse)); }
+diff -r Simple_Advanced_Webserver/code/response.h Simple_Advanced_Webserver.gemini/code/response.h
+1c1,3
+< void HandleResponse(int fd, char *buf, int n);
+\ No newline at end of file
+---
+> #include "conn.h"
+> 
+> void HandleResponse(Conn *conn, char *buf, int n);
+diff -r Simple_Advanced_Webserver/code/server.c Simple_Advanced_Webserver.gemini/code/server.c
+28c28
+<   _cb_3 *callback_data;
+---
+>   _cb_data *callback_data;
+36a37,40
+>   void *ssl_ctx;		/* SSL_CTX*, NULL until SetTLS() is called */
+>   int TLSSocket;		/* second listener for the secure port     */
+>   int TLSPort;
+>   Conn *conns[MAX_CLIENT];	/* maps a client fd to its connection obj  */
+73c77
+< SetCallbacks (Server * Current, _cb_1 * cbnew, _cb_3 * cbdata, _cb_1 * cbclose) {
+---
+> SetCallbacks (Server * Current, _cb_1 * cbnew, _cb_data * cbdata, _cb_1 * cbclose) {
+81c85
+< ServerOpen (Server * Current) {
+---
+> SetTLS (Server * Current, int TLSPort, const char *cert, const char *key) {
+82a87,97
+> 
+>   obj->ssl_ctx = ConnServerCTX (cert, key);
+>   if (!obj->ssl_ctx)
+>     return (-1);
+>   obj->TLSPort = TLSPort;
+>   return 0;
+> }
+> 
+> /* Create, bind and listen on a TCP port.  Returns the socket fd, or -1. */
+> static int
+> MakeListener (int Port, int QDepth) {
+83a99,100
+>   int s;
+>   int reuse_addr = 1;		/* Used so we can re-bind to our port */
+85,90c102,104
+<   obj->epfd = epoll_create (MAX_CLIENT);
+<   if (!obj->epfd)
+<     {
+<       perror ("epoll_create\n");
+<       return (-1);
+<     }
+---
+>   s = socket (PF_INET, SOCK_STREAM, IPPROTO_TCP);
+>   if (s == SOCKET_ERROR)
+>     return (-1);
+92c106,107
+<   memset ((char *) &sin, 0, sizeof (sin));
+---
+>   /* So that we can re-bind to it without TIME_WAIT problems */
+>   setsockopt (s, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof (reuse_addr));
+93a109
+>   memset ((char *) &sin, 0, sizeof (sin));
+95c111
+<   sin.sin_port = htons (obj->Port);
+---
+>   sin.sin_port = htons (Port);
+97,98c113
+<   obj->PrimarySocket = socket (PF_INET, SOCK_STREAM, IPPROTO_TCP);
+<   if (obj->PrimarySocket == SOCKET_ERROR)
+---
+>   if (bind (s, (struct sockaddr *) &sin, sizeof (sin)) == SOCKET_ERROR)
+99a115
+>       close (s);
+103,104c119
+<   if (bind (obj->PrimarySocket, (struct sockaddr *) &sin, sizeof (sin))
+<       == SOCKET_ERROR)
+---
+>   if (listen (s, QDepth) == SOCKET_ERROR)
+106,107c121,122
+<       close (obj->PrimarySocket);
+<       return (-2);
+---
+>       close (s);
+>       return (-1);
+110c125,133
+<   if (listen (obj->PrimarySocket, obj->QDepth) == SOCKET_ERROR)
+---
+>   return s;
+> }
+> 
+> int
+> ServerOpen (Server * Current) {
+>   struct object *obj = (object *) Current;
+> 
+>   obj->epfd = epoll_create (MAX_CLIENT);
+>   if (!obj->epfd)
+112,113c135,136
+<       close (obj->PrimarySocket);
+<       return (-2);
+---
+>       perror ("epoll_create\n");
+>       return (-1);
+116,119c139,141
+<   int reuse_addr = 1;		/* Used so we can re-bind to our port */
+<   /* So that we can re-bind to it without TIME_WAIT problems */
+<   setsockopt (obj->PrimarySocket, SOL_SOCKET, SO_REUSEADDR, &reuse_addr,
+< 	      sizeof (reuse_addr));
+---
+>   obj->PrimarySocket = MakeListener (obj->Port, obj->QDepth);
+>   if (obj->PrimarySocket < 0)
+>     return (-2);
+128a151,166
+>   /* If SetTLS() supplied a certificate, open the secure listener too. */
+>   if (obj->ssl_ctx)
+>     {
+>       obj->TLSSocket = MakeListener (obj->TLSPort, obj->QDepth);
+>       if (obj->TLSSocket < 0)
+> 	return (-2);
+> 
+>       obj->ev.events = EPOLLIN | EPOLLERR | EPOLLHUP;
+>       obj->ev.data.fd = obj->TLSSocket;
+>       if (epoll_ctl (obj->epfd, EPOLL_CTL_ADD, obj->TLSSocket, &obj->ev) < 0)
+> 	{
+> 	  perror ("epoll_ctl, failed to add TLS listenfd\n");
+> 	  return (-3);
+> 	}
+>     }
+> 
+157,158d194
+<   char buffer[SERVBUFFER];
+<   int n;
+163c199,202
+<       if (obj->events[i].data.fd == obj->PrimarySocket)
+---
+>       int active = obj->events[i].data.fd;
+> 
+>       if (active == obj->PrimarySocket ||
+> 	  (obj->ssl_ctx && active == obj->TLSSocket))
+165,166c204,209
+< 	  clifd = accept (obj->PrimarySocket, NULL, NULL);
+< 	  if (clifd > 0)
+---
+> 	  /* A listener is ready: accept a new connection.  Which listener
+> 	     it was decides whether this connection is plaintext or TLS. */
+> 	  void *ctx = (active == obj->TLSSocket) ? obj->ssl_ctx : NULL;
+> 
+> 	  clifd = accept (active, NULL, NULL);
+> 	  if (clifd > 0 && clifd < MAX_CLIENT)
+169a213,217
+> 
+> 	      /* Wrap the raw fd so nothing downstream has to know whether
+> 	         this connection is plaintext or secure. */
+> 	      obj->conns[clifd] = ConnNew (clifd, ctx);
+> 
+171c219
+< 		(obj->callback_new) (obj->events[i].data.fd);
+---
+> 		(obj->callback_new) (clifd);
+182c230
+< 	  else
+---
+> 	  else if (clifd > 0)
+184c232,233
+< 	      // new connection failed
+---
+> 	      /* more connections than our table can track */
+> 	      close (clifd);
+189,191c238,241
+< 	 // Send the response back
+< 	 if (*obj->callback_data)
+< 		(obj->callback_data) (obj->events[i].data.fd, buffer, n);
+---
+> 	  /* An existing client has data.  Hand its connection object off to
+> 	     a worker thread, which owns the read, write and close. */
+> 	  Conn *conn = obj->conns[active];
+> 	  obj->conns[active] = NULL;
+193,194c243,244
+<           // handed off to another thread for processing.
+<           epoll_ctl (obj->epfd, EPOLL_CTL_DEL, obj->events[i].data.fd, NULL);
+---
+> 	  // remove it from epoll before the worker can close/reuse the fd
+> 	  epoll_ctl (obj->epfd, EPOLL_CTL_DEL, active, NULL);
+196c246,247
+< 	  /* we now have to handle the read and close inside the thread. */
+---
+> 	  if (*obj->callback_data && conn)
+> 	    (obj->callback_data) (conn);
+197a249
+> 	  /* we now have to handle the read and close inside the thread. */
+diff -r Simple_Advanced_Webserver/code/server.h Simple_Advanced_Webserver.gemini/code/server.h
+3a4,5
+> #include "conn.h"
+> 
+9c11
+< typedef void _cb_3 (int, char *, int);
+---
+> typedef void _cb_data (Conn *);
+16c18,19
+< void SetCallbacks (Server *, _cb_1 *, _cb_3 *, _cb_1 *);
+---
+> int SetTLS (Server *, int, const char *, const char *);
+> void SetCallbacks (Server *, _cb_1 *, _cb_data *, _cb_1 *);
+diff -r Simple_Advanced_Webserver/code/threads.c Simple_Advanced_Webserver.gemini/code/threads.c
+6a7
+> #include "conn.h"
+12c13
+<     int fd;
+---
+>     Conn *conn;
+36c37,41
+<         n = recv(t->fd, t->buffer, 1023, 0);
+---
+>         // Complete the TLS handshake (a no-op for plaintext connections)
+>         // here in the worker, so it stays off the main epoll loop.
+>         if (ConnAccept(t->conn))
+>         {
+>             n = ConnRead(t->conn, t->buffer, 1023);
+38,40c43,46
+<         if (n > 0)
+<         { // got a request, process it.
+<             HandleResponse(t->fd, t->buffer, n);
+---
+>             if (n > 0)
+>             { // got a request, process it.
+>                 HandleResponse(t->conn, t->buffer, n);
+>             }
+43c49,50
+<         close(t->fd);
+---
+>         ConnClose(t->conn);
+>         t->conn = NULL;
+121c128
+< void ThreadHandleResponse(int fd)
+---
+> void ThreadHandleResponse(Conn *conn)
+148c155
+<             t->fd = fd;
+---
+>             t->conn = conn;
+diff -r Simple_Advanced_Webserver/code/threads.h Simple_Advanced_Webserver.gemini/code/threads.h
+1c1
+< 
+---
+> #include "conn.h"
+4c4
+< void  ThreadHandleResponse(int);
+---
+> void  ThreadHandleResponse(Conn *);
+6d5
+< 
+Binary files Simple_Advanced_Webserver/code/webserver and Simple_Advanced_Webserver.gemini/code/webserver differ
+diff -r Simple_Advanced_Webserver/code/webserver.c Simple_Advanced_Webserver.gemini/code/webserver.c
+4a5
+> #include <stdio.h>
+8a10
+> #include "conn.h"
+16,17c18,19
+< NewData (int fd, char *data, int size)
+< { ThreadHandleResponse(fd); }
+---
+> NewData (Conn *conn)
+> { ThreadHandleResponse(conn); }
+20c22
+< ConnClose (int fd)
+---
+> OnConnClose (int fd)
+28a31
+>   ConnLibInit();
+31,32c34,42
+<   SetPort (New, 8080, 25);
+<   SetCallbacks (New, NewConn, NewData, ConnClose);
+---
+>   SetPort (New, 8083, 25);
+> 
+>   /* Enable HTTPS on 8443.  Generate cert.pem / key.pem with the openssl
+>      command in the README.  If the files are missing we just log it and
+>      keep serving plaintext on 8080. */
+>   if (SetTLS (New, 8443, "cert.pem", "key.pem") != 0)
+>     printf ("TLS disabled: could not load cert.pem/key.pem\n");
+> 
+>   SetCallbacks (New, NewConn, NewData, OnConnClose);
+Only in Simple_Advanced_Webserver.gemini: GEMINI.md
+Binary files Simple_Advanced_Webserver/.git/index and Simple_Advanced_Webserver.gemini/.git/index differ
+diff -r Simple_Advanced_Webserver/.gitignore Simple_Advanced_Webserver.gemini/.gitignore
+2a3,7
+> # TLS certificate and private key (generated locally, never commit)
+> cert.pem
+> key.pem
+> *.pem
+> 
+diff -r Simple_Advanced_Webserver/README.md Simple_Advanced_Webserver.gemini/README.md
+3c3
+< A simple web server that integrates threads, sendfile, epoll, and python scripting. 
+---
+> A simple web server that integrates threads, sendfile, epoll, TLS, and python scripting. 
+7a8,10
+> TLS uses OpenSSL, so the development headers are needed too
+> sudo apt-get install libssl-dev
+> 
+11c14,21
+< gcc *.c -I/usr/include/python3.11 -I/usr/include/python3.11 -lpython3.11 -ggdb -o webserver
+---
+> gcc *.c -I/usr/include/python3.11 -I/usr/include/python3.11 -lpython3.11 -lssl -lcrypto -ggdb -o webserver
+> 
+> Before starting the server, generate a self-signed certificate next to the
+> webserver binary (this creates cert.pem and key.pem):
+> openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 3650 -nodes -subj "/C=US/ST=OH/L=City/O=Citizen/OU=Person/CN=localhost"
+> 
+> If cert.pem / key.pem are missing the server logs a notice and serves
+> plaintext only on 8080; with them present it also serves HTTPS on 8443.
+29a40,44
+> 
+> secure (TLS) examples, same content over https on port 8443:
+> 
+> https://192.168.1.179:8443/path/test2.html
+> https://192.168.1.179:8443/python/hello.py
+44c59
+< - [ ] Support SSL
+---
+> - [x] Support SSL

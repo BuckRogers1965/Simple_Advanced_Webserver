@@ -3,9 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
-#include <sys/sendfile.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
+#include "conn.h"
 #include "http_request.h"
 #include "pyscript.h"
 
@@ -32,7 +31,7 @@ int OpenFile(HttpRequest *req) {
     return open(path, O_RDONLY); // the +1 removes the leading slash
 }
 
-void HandleResponse(int fd, char *buf, int n) {
+void HandleResponse(Conn *conn, char *buf, int n) {
     char badresponse[1024] =
         "HTTP/1.1 404 Not Found\r\n\r\n<HTML><HEAD><meta http-equiv=\"content-type\" content=\"text/html;charset=utf-8\">\r\n<TITLE>Not Found</TITLE></HEAD><BODY>\r\n<H1>Not Found</H1>\r\n</BODY></HTML>\r\n\r\n";
     char goodresponse[1024] = "HTTP/1.1 200 OK\r\n\r\n";
@@ -47,8 +46,9 @@ void HandleResponse(int fd, char *buf, int n) {
         //printf(" *** path %s, \n ", req->path );
         if (strstr(request->path, "python") == request->path) {
             printf("+"); fflush(stdout);
-            if (!ExecutePythonScript(fd, request) )
-                send(fd, badresponse, strlen(badresponse), 0);
+            if (!ExecutePythonScript(conn, request) )
+                ConnWrite(conn, badresponse, strlen(badresponse));
+            freeHttpRequest(request);
             return;
         } else {
             int fh;
@@ -56,16 +56,16 @@ void HandleResponse(int fd, char *buf, int n) {
             printf(".");
             if (fh > 0) {
                 struct stat stat_buf; /* hold information about input file */
-                send(fd, goodresponse, strlen(goodresponse), 0);
+                ConnWrite(conn, goodresponse, strlen(goodresponse));
                 /* size and permissions of fh */
                 fstat(fh, &stat_buf);
-                sendfile(fd, fh, NULL, stat_buf.st_size);
+                ConnSendFile(conn, fh, stat_buf.st_size);
                 close(fh);
             }
-            else { 
+            else {
                 //printf(" not found \"%s\"", req->path );
                 printf("-");
-                send(fd, badresponse, strlen(badresponse), 0); }
+                ConnWrite(conn, badresponse, strlen(badresponse)); }
         }
     }
     freeHttpRequest(request);

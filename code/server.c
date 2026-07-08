@@ -25,7 +25,7 @@
 typedef struct object {
   int state;
   _cb_1 *callback_new;
-  _cb_3 *callback_data;
+  _cb_data *callback_data;
   _cb_1 *callback_close;
   int PrimarySocket;
   int Port;
@@ -34,6 +34,10 @@ typedef struct object {
   struct epoll_event ev;
   struct epoll_event *events;
   int epfd;
+  void *ssl_ctx;		/* SSL_CTX*, NULL until SetTLS() is called */
+  int TLSSocket;		/* second listener for the secure port     */
+  int TLSPort;
+  Conn *conns[MAX_CLIENT];	/* maps a client fd to its connection obj  */
 } object;
 
 void nonblock(int sockfd) {
@@ -70,7 +74,7 @@ SetPort (Server * Current, int Port, int QDepth) {
 }
 
 void
-SetCallbacks (Server * Current, _cb_1 * cbnew, _cb_3 * cbdata, _cb_1 * cbclose) {
+SetCallbacks (Server * Current, _cb_1 * cbnew, _cb_data * cbdata, _cb_1 * cbclose) {
   struct object *obj = (object *) Current;
   obj->callback_new = cbnew;
   obj->callback_data = cbdata;
@@ -78,9 +82,52 @@ SetCallbacks (Server * Current, _cb_1 * cbnew, _cb_3 * cbdata, _cb_1 * cbclose) 
 }
 
 int
+SetTLS (Server * Current, int TLSPort, const char *cert, const char *key) {
+  struct object *obj = (object *) Current;
+
+  obj->ssl_ctx = ConnServerCTX (cert, key);
+  if (!obj->ssl_ctx)
+    return (-1);
+  obj->TLSPort = TLSPort;
+  return 0;
+}
+
+/* Create, bind and listen on a TCP port.  Returns the socket fd, or -1. */
+static int
+MakeListener (int Port, int QDepth) {
+  struct sockaddr_in sin;
+  int s;
+  int reuse_addr = 1;		/* Used so we can re-bind to our port */
+
+  s = socket (PF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (s == SOCKET_ERROR)
+    return (-1);
+
+  /* So that we can re-bind to it without TIME_WAIT problems */
+  setsockopt (s, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof (reuse_addr));
+
+  memset ((char *) &sin, 0, sizeof (sin));
+  sin.sin_family = AF_INET;
+  sin.sin_port = htons (Port);
+
+  if (bind (s, (struct sockaddr *) &sin, sizeof (sin)) == SOCKET_ERROR)
+    {
+      close (s);
+      return (-1);
+    }
+
+  if (listen (s, QDepth) == SOCKET_ERROR)
+    {
+      close (s);
+      return (-1);
+    }
+
+  return s;
+}
+
+int
 ServerOpen (Server * Current) {
   struct object *obj = (object *) Current;
-  struct sockaddr_in sin;
 
   obj->epfd = epoll_create (MAX_CLIENT);
   if (!obj->epfd)
@@ -89,34 +136,9 @@ ServerOpen (Server * Current) {
       return (-1);
     }
 
-  memset ((char *) &sin, 0, sizeof (sin));
-
-  sin.sin_family = AF_INET;
-  sin.sin_port = htons (obj->Port);
-
-  obj->PrimarySocket = socket (PF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (obj->PrimarySocket == SOCKET_ERROR)
-    {
-      return (-1);
-    }
-
-  if (bind (obj->PrimarySocket, (struct sockaddr *) &sin, sizeof (sin))
-      == SOCKET_ERROR)
-    {
-      close (obj->PrimarySocket);
-      return (-2);
-    }
-
-  if (listen (obj->PrimarySocket, obj->QDepth) == SOCKET_ERROR)
-    {
-      close (obj->PrimarySocket);
-      return (-2);
-    }
-
-  int reuse_addr = 1;		/* Used so we can re-bind to our port */
-  /* So that we can re-bind to it without TIME_WAIT problems */
-  setsockopt (obj->PrimarySocket, SOL_SOCKET, SO_REUSEADDR, &reuse_addr,
-	      sizeof (reuse_addr));
+  obj->PrimarySocket = MakeListener (obj->Port, obj->QDepth);
+  if (obj->PrimarySocket < 0)
+    return (-2);
 
   obj->ev.events = EPOLLIN | EPOLLERR | EPOLLHUP;
   obj->ev.data.fd = obj->PrimarySocket;
@@ -124,6 +146,22 @@ ServerOpen (Server * Current) {
     {
       perror ("epoll_ctl, failed to add listenfd\n");
       return (-3);
+    }
+
+  /* If SetTLS() supplied a certificate, open the secure listener too. */
+  if (obj->ssl_ctx)
+    {
+      obj->TLSSocket = MakeListener (obj->TLSPort, obj->QDepth);
+      if (obj->TLSSocket < 0)
+	return (-2);
+
+      obj->ev.events = EPOLLIN | EPOLLERR | EPOLLHUP;
+      obj->ev.data.fd = obj->TLSSocket;
+      if (epoll_ctl (obj->epfd, EPOLL_CTL_ADD, obj->TLSSocket, &obj->ev) < 0)
+	{
+	  perror ("epoll_ctl, failed to add TLS listenfd\n");
+	  return (-3);
+	}
     }
 
   obj->events = (struct epoll_event *) calloc (MAX_CLIENT, sizeof (struct epoll_event));
@@ -154,21 +192,31 @@ ServerLoop (Server * Current) {
   int clifd;
   int i;
   int res;
-  char buffer[SERVBUFFER];
-  int n;
 
   res = epoll_wait (obj->epfd, obj->events, MAX_CLIENT, 1);
   for (i = 0; i < res; i++)
     {
-      if (obj->events[i].data.fd == obj->PrimarySocket)
+      int active = obj->events[i].data.fd;
+
+      if (active == obj->PrimarySocket ||
+	  (obj->ssl_ctx && active == obj->TLSSocket))
 	{
-	  clifd = accept (obj->PrimarySocket, NULL, NULL);
-	  if (clifd > 0)
+	  /* A listener is ready: accept a new connection.  Which listener
+	     it was decides whether this connection is plaintext or TLS. */
+	  void *ctx = (active == obj->TLSSocket) ? obj->ssl_ctx : NULL;
+
+	  clifd = accept (active, NULL, NULL);
+	  if (clifd > 0 && clifd < MAX_CLIENT)
 	    {
 	      /* we could add code here to allow refuse connection */
 	      /* add code here to get client info for connection */
+
+	      /* Wrap the raw fd so nothing downstream has to know whether
+	         this connection is plaintext or secure. */
+	      obj->conns[clifd] = ConnNew (clifd, ctx);
+
 	      if (*obj->callback_new)
-		(obj->callback_new) (obj->events[i].data.fd);
+		(obj->callback_new) (clifd);
 	      //printf (".");
 	      //nonblock (clifd);
 	      obj->ev.events = EPOLLIN | EPOLLET;
@@ -179,22 +227,26 @@ ServerLoop (Server * Current) {
 		  //exit (1);
 		}
 	    }
-	  else
+	  else if (clifd > 0)
 	    {
-	      // new connection failed
+	      /* more connections than our table can track */
+	      close (clifd);
 	    }
 	}
       else
 	{
-	 // Send the response back
-	 if (*obj->callback_data)
-		(obj->callback_data) (obj->events[i].data.fd, buffer, n);
+	  /* An existing client has data.  Hand its connection object off to
+	     a worker thread, which owns the read, write and close. */
+	  Conn *conn = obj->conns[active];
+	  obj->conns[active] = NULL;
 
-          // handed off to another thread for processing.
-          epoll_ctl (obj->epfd, EPOLL_CTL_DEL, obj->events[i].data.fd, NULL);
+	  // remove it from epoll before the worker can close/reuse the fd
+	  epoll_ctl (obj->epfd, EPOLL_CTL_DEL, active, NULL);
+
+	  if (*obj->callback_data && conn)
+	    (obj->callback_data) (conn);
 
 	  /* we now have to handle the read and close inside the thread. */
-
 	}
     }
   return (0);

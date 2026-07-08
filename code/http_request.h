@@ -1,3 +1,5 @@
+#ifndef HTTP_REQUEST_H
+#define HTTP_REQUEST_H
 
 // Define a structure for key-value pairs (used for headers, cookies, and form data)
 typedef struct KeyValue {
@@ -21,4 +23,6 @@ typedef struct HttpRequest {
 
 HttpRequest* parseHttpRequest(const char *request);
 void freeHttpRequest(HttpRequest *req);
-void printHttpRequest(HttpRequest *req); 
+void printHttpRequest(HttpRequest *req);
+
+#endif /* HTTP_REQUEST_H */

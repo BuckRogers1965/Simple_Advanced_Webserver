@@ -1,10 +1,12 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <Python.h>
 
+#include "conn.h"
 #include "http_request.h"
 
 // Root directory for Python scripts
@@ -70,7 +72,7 @@ void SetEnvironmentVariables(HttpRequest *request) {
 }
 
 
-int ExecutePythonScript(int fd, HttpRequest *request)
+int ExecutePythonScript(Conn *conn, HttpRequest *request)
 {
     int pipefd[2]; // Pipe to capture the output of the Python script
     int stdin_pipe[2]; // Pipe for stdin
@@ -173,9 +175,9 @@ int ExecutePythonScript(int fd, HttpRequest *request)
         while ((bytes_read = read(pipefd[0], buffer, sizeof(buffer) - 1)) > 0)
         {
             buffer[bytes_read] = '\0'; // Null-terminate the buffer
-            if (send(fd, buffer, bytes_read, 0) == -1)
+            if (ConnWrite(conn, buffer, bytes_read) <= 0)
             {
-                perror("send");
+                perror("ConnWrite");
                 close(pipefd[0]);
                 waitpid(pid, NULL, 0);
                 return 0;

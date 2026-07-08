@@ -4,12 +4,13 @@
 #include <sys/socket.h>
 #include <pthread.h>
 
+#include "conn.h"
 #include "response.h"
 
 typedef struct thread
 {
     int Running;
-    int fd;
+    Conn *conn;
     pthread_t thread;
     char buffer[1024];
     struct thread *next;
@@ -33,14 +34,20 @@ void *handleRequest(void *arg)
             usleep(100);
         }
 
-        n = recv(t->fd, t->buffer, 1023, 0);
+        // Complete the TLS handshake (a no-op for plaintext connections)
+        // here in the worker, so it stays off the main epoll loop.
+        if (ConnAccept(t->conn))
+        {
+            n = ConnRead(t->conn, t->buffer, 1023);
 
-        if (n > 0)
-        { // got a request, process it.
-            HandleResponse(t->fd, t->buffer, n);
+            if (n > 0)
+            { // got a request, process it.
+                HandleResponse(t->conn, t->buffer, n);
+            }
         }
 
-        close(t->fd);
+        ConnClose(t->conn);
+        t->conn = NULL;
         t->Running = 0;
 
         pthread_mutex_lock(&worklist_mutex);
@@ -118,7 +125,7 @@ void ThreadCheck()
     pthread_mutex_unlock(&worklist_mutex);
 }
 
-void ThreadHandleResponse(int fd)
+void ThreadHandleResponse(Conn *conn)
 {
     struct thread *t;
 
@@ -145,7 +152,7 @@ void ThreadHandleResponse(int fd)
             pthread_mutex_unlock(&worklist_mutex);
 
             // setup thread and run it
-            t->fd = fd;
+            t->conn = conn;
             t->Running = 1;
             return;
         }
